@@ -2,9 +2,9 @@
  *  SimpliSafe Monitor
  *
  *  Author: toby@cth3.com
- *  Date: 3/5/16
+ *  Date: 2/7/2018
  *
- *  Monitors and controlls the state of a SimpliSafe alarm system, syncs with Smart Home Monitor and can turn on/off switchs based on SimpliSafe state.
+ *  Monitors and controls the state of a SimpliSafe alarm system, syncs with Smart Home Monitor and can turn on/off switches based on SimpliSafe state.
  *  Works in conjunction with SimpliSafe Alarm Integration device type.
  */
 
@@ -13,7 +13,7 @@
 definition(
     name: "SimpliSafe Monitor",
     namespace: "tobycth3",
-    author: "toby@cth3.com",
+    author: "Toby Harris",
     description: "Monitors and controlls the state of a SimpliSafe alarm system, syncs with Smart Home Monitor and can turn on/off switchs based on SimpliSafe state. Works in conjunction with SimpliSafe Alarm Integration device type.",
     category: "Safety & Security",
     iconUrl: "https://pbs.twimg.com/profile_images/594250179215241217/LOjVA4Yf.jpg",
@@ -25,20 +25,25 @@ preferences {
   }
   
   section("Control these switchs") {
-	input "alarmtile", "capability.switch", title: "Select switches", multiple: true, required: false  } 
+	input "alarmtile", "capability.switch", title: "Select switches", multiple: true, required: false  
+  } 
   
   section("Turn on switchs when SimpliSafe state matches") {
-    input "alarmon", "enum", title: "Select on state", multiple: true, required: false, metadata:[values:["off", "away", "home"]]
+    input "alarmon", "enum", title: "Select on state", multiple: true, required: false, metadata:[values:["off", "home", "away"]]
   }
   
   section("Turn off switchs when SimpliSafe state matches") {
-    input "alarmoff", "enum", title: "Select off state", multiple: true, required: false, metadata:[values:["off", "away", "home"]]
+    input "alarmoff", "enum", title: "Select off state", multiple: true, required: false, metadata:[values:["off", "home", "away"]]
   }
-   
-  section("Notifications") {
-    input "sendPushMessage", "enum", title: "Send a push notification?", metadata:[values:["Yes","No"]], required: false
-   }
+  
+  section("Notifications"){
+    input("recipients", "contact", title: "Send notifications to", required: false) {
+    input "sendPushMessage", "enum", title: "Send a push notification?", options: ["Yes", "No"], required: false
+    input "phone", "phone", title: "Phone Number (for SMS, optional)", required: false
+    paragraph "If outside the US please make sure to enter the proper country code"
   }
+  }
+}
 
 def installed() {
   init()
@@ -65,7 +70,8 @@ def updatestate() {
 
 def shmaction(evt) {
 log.info "Smart Home Monitor: $evt.displayName - $evt.value"
-state.shmstate = evt.value
+state.shmstate_raw = evt.value
+state.shmstate = state.shmstate_raw.toLowerCase()
 
   if(shmOff && !alarmOff) {
     log.debug("Smart Home Monitor: '$state.shmstate', SimpliSafe: '$state.alarmstate'")
@@ -90,7 +96,8 @@ state.shmstate = evt.value
 
 def alarmstate(evt) {
 log.info "SimpliSafe Alarm: $evt.displayName - $evt.value"
-state.alarmstate = evt.value
+state.alarmstate_raw = evt.value
+state.alarmstate = state.alarmstate_raw.toLowerCase()
 
   if (alarmOff && !shmOff) {
     log.debug("SimpliSafe: '$state.alarmstate', Smart Home Monitor: '$state.shmstate'")
@@ -112,12 +119,12 @@ state.alarmstate = evt.value
  }
 }
   
-  if (evt.value in alarmon) {
+  if (state.alarmstate in alarmon) {
     log.debug("SimpliSafe state: $state.alarmstate")
      alarmstateon()
   }
  else {
-  if (evt.value in alarmoff) {
+  if (state.alarmstate in alarmoff) {
     log.debug("SimpliSafe state: $state.alarmstate")
      alarmstateoff()
   }
@@ -133,7 +140,7 @@ def setalarmoff() {
       if (!alarmOff) {
       def message = "Setting SimpliSafe to Off"
       log.info(message)
-      send(message)
+      sendMessage(message)
       alarmsystem.off()
   }
   else {
@@ -149,7 +156,7 @@ def setalarmaway() {
       if (!alarmAway) {
       def message = "Setting SimpliSafe to Away"
       log.info(message)
-      send(message)
+      sendMessage(message)
       alarmsystem.away()
   }
   else {
@@ -165,7 +172,7 @@ def setalarmhome() {
       if (!alarmHome) {
       def message = "Setting SimpliSafe to Home"
       log.info(message)
-      send(message)
+      sendMessage(message)
       alarmsystem.home()
   }
   else {
@@ -181,7 +188,7 @@ def setshmoff() {
       if (!shmOff) {
       def message = "Setting Smart Home Monitor to Off"
       log.info(message)
-      send(message)
+      sendMessage(message)
       sendLocationEvent(name: "alarmSystemStatus", value: "off")
   }
   else {
@@ -197,7 +204,7 @@ def setshmaway() {
       if (!shmAway) {
       def message = "Setting Smart Home Monitor to Away"
       log.info(message)
-      send(message)
+      sendMessage(message)
       sendLocationEvent(name: "alarmSystemStatus", value: "away")
   }
   else {
@@ -213,7 +220,7 @@ def setshmstay() {
       if (!shmStay) {
       def message = "Setting Smart Home Monitor to Stay"
       log.info(message)
-      send(message)
+      sendMessage(message)
       sendLocationEvent(name: "alarmSystemStatus", value: "stay")
   }
   else {
@@ -225,12 +232,12 @@ def setshmstay() {
 
 def alarmstateon() {
     log.debug ("Setting switches to on")
-      settings.alarmtile.on()
+      alarmtile?.on()
   }
   
 def alarmstateoff() {
     log.debug ("Setting switches to off")
-      settings.alarmtile.off()
+      alarmtile?.off()
   } 
   
 // TODO - centralize somehow
@@ -282,10 +289,28 @@ private getshmStay() {
 	result
 }
   
-private send(msg) {
-  if(sendPushMessage != "No") {
-    log.debug("Sending push message")
-    sendPush(msg)
-   }
-  log.debug(msg)
-  }
+private sendMessage(msg) {
+	Map options = [:]
+    
+	if (location.contactBookEnabled && recipients) {
+		sendNotificationToContacts(msg, recipients, options)
+	} else {
+    	if (phone) {
+        	options.phone = phone
+			if (sendPushMessage && sendPushMessage != 'No') {
+				log.debug 'Sending push and SMS'
+				options.method = 'both'
+			} else {
+				log.debug 'Sending SMS'
+				options.method = 'phone'
+			}
+        } else if (sendPushMessage && sendPushMessage != 'No') {
+			log.debug 'Sending push'
+			options.method = 'push'
+		} else {
+			log.debug 'Sending nothing'
+			options.method = 'none'
+		}
+		sendNotification(msg, options)        
+	}
+}
